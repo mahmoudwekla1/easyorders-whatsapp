@@ -14,7 +14,10 @@ async function webhook(req, res) {
   try {
     const data = req.body || {};
 
-    // 🆕 0) قراءة التاج من الويبهوك URL ?storeTag=EQ / GZ / BR
+    // ✅ Debug كامل للـ payload (مؤقت)
+    console.log("📦 FULL DATA:", JSON.stringify(data));
+
+    // 🆕 قراءة التاج من الويبهوك URL ?storeTag=EQ / GZ / BR
     const storeTagRaw = (req.query && req.query.storeTag) || "";
     const storeTag = storeTagRaw ? `[${storeTagRaw}]` : "";
     console.log("🏪 Store Tag:", storeTagRaw || "NO_TAG");
@@ -36,33 +39,59 @@ async function webhook(req, res) {
     const productName = firstItem.product?.name || "منتجك";
     const quantity = firstItem.quantity != null ? firstItem.quantity : 1;
 
-    // السعر: نحاول نجيبه من الآتي بالترتيب
-    const price =
-      firstItem.price != null
-        ? firstItem.price
-        : data.total_cost != null
-        ? data.total_cost
-        : data.cost != null
-        ? data.cost
-        : "";
-
-    // تركيب المتغير {{3}} = العنوان + المنتج + الكمية + السعر
-    let addressAndProduct = address || "";
-    if (productName) {
-      addressAndProduct += (addressAndProduct ? " - " : "") + productName;
-    }
-    if (quantity) {
-      addressAndProduct += ` - الكمية: ${quantity}`;
-    }
-    if (price !== "") {
-      addressAndProduct += ` - السعر: ${price}`;
-    }
-
-    // تنظيف الباراميترات (مفيش سطور جديدة أو Tabs)
+    // ✅ تنظيف الباراميترات (مفيش سطور جديدة أو Tabs)
     const cleanParam = (text) => {
       if (!text) return "";
       return text.toString().replace(/[\r\n\t]+/g, " ").trim();
     };
+
+    // ✅ Helper لتحويل أي رقم بشكل آمن
+    const toNumber = (v) => {
+      if (v === null || v === undefined || v === "") return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+
+    // -------------------------
+    // 1.1) حساب السعر + الشحن + الإجمالي
+    // -------------------------
+
+    // ✅ سعر المنتج (نحاول نجيبه من أكتر من مكان)
+    const productPrice =
+      toNumber(firstItem.price) ??
+      toNumber(firstItem.total) ??
+      toNumber(data.subtotal_cost) ??
+      toNumber(data.subtotal) ??
+      toNumber(data.items_total) ??
+      null;
+
+    // ✅ الشحن (نجرب كذا مفتاح شائع)
+    const shippingCostRaw =
+      data.shipping_cost ??
+      data.shipping_fees ??
+      data.delivery_cost ??
+      data.shipping_price ??
+      data.shipping ??
+      data.delivery_fee ??
+      data.deliveryFees ??
+      0;
+
+    const shippingCost = toNumber(shippingCostRaw) ?? 0;
+
+    // ✅ إجمالي المنصة (لو موجود)
+    const platformTotal =
+      toNumber(data.total_cost) ??
+      toNumber(data.total) ??
+      toNumber(data.cost) ??
+      null;
+
+    // ✅ الإجمالي النهائي
+    const totalWithShipping =
+      platformTotal != null
+        ? platformTotal
+        : productPrice != null
+        ? productPrice + shippingCost
+        : null;
 
     // -------------------------
     // 2) توحيد صيغة رقم الموبايل
@@ -102,15 +131,44 @@ async function webhook(req, res) {
     }
 
     // -------------------------
-    // 4) Payload الخاص بالتمبلت
+    // 4) تركيب field_3
+    // -------------------------
+    let addressAndProduct = address || "";
+
+    if (productName) {
+      addressAndProduct += (addressAndProduct ? " - " : "") + productName;
+    }
+    if (quantity) {
+      addressAndProduct += ` - الكمية: ${quantity}`;
+    }
+
+    // ✅ عرض الأسعار
+    if (productPrice != null) {
+      addressAndProduct += ` - سعر المنتج: ${productPrice}`;
+    }
+
+    // ✅ الشحن: لو 0 => مجاني
+    if (shippingCost > 0) {
+      addressAndProduct += ` - الشحن: ${shippingCost}`;
+    } else {
+      addressAndProduct += ` - الشحن: مجاني`;
+    }
+
+    // ✅ الإجمالي
+    if (totalWithShipping != null) {
+      addressAndProduct += ` - الإجمالي: ${totalWithShipping}`;
+    }
+
+    // -------------------------
+    // 5) Payload الخاص بالتمبلت
     // -------------------------
     const payload = {
       phone_number: normalizedPhone,
-      template_name: "order_confirmation",
-      template_language: "en", // نفس اللغة اللي في التمبلت
-      field_1: cleanParam(customerName),                        // {{1}} اسم العميل
-      field_2: cleanParam(`${orderId} ${storeTag}`.trim()),     // 🆕 {{2}} رقم الطلب + [EQ]/[GZ]/[BR]
-      field_3: cleanParam(addressAndProduct),                   // {{3}} العنوان + المنتج + الكمية + السعر
+      template_name: "1st_utility",
+      template_language: "en",
+      field_1: cleanParam(customerName),
+      field_2: cleanParam(`${orderId} ${storeTag}`.trim()),
+      field_3: cleanParam(addressAndProduct),
       contact: {
         first_name: cleanParam(customerName),
         phone_number: normalizedPhone,
