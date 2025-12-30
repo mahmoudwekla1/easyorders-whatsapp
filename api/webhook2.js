@@ -1,10 +1,12 @@
 // api/webhook2.js
 
 async function webhook(req, res) {
+  // ✅ Health Check
   if (req.method === "GET") {
-    return res.status(200).send("Webhook2 Running ✅");
+    return res.status(200).send("Webhook Running ✅");
   }
 
+  // ✅ Allow only POST (EasyOrders)
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
@@ -12,11 +14,16 @@ async function webhook(req, res) {
   try {
     const data = req.body || {};
 
-    console.log("🔥 WEBHOOK2 VERSION = 1st_utility (LANG=en)");
+    // 🏪 Store Tag (افتراضي EQ)
+    const storeTagRaw = (req.query && req.query.storeTag) || "EQ";
+    const storeTag = storeTagRaw ? `[${storeTagRaw}]` : "";
+    console.log("🏪 Store Tag:", storeTagRaw);
+
+    // 🧪 لوج كامل (تقدر تشيله بعد الاستقرار)
     console.log("📦 FULL DATA:", JSON.stringify(data));
 
     // -------------------------
-    // 1) بيانات العميل
+    // 1) بيانات العميل والطلب
     // -------------------------
     const customerName =
       data.full_name || data.name || data.customer_name || "عميلنا العزيز";
@@ -28,11 +35,11 @@ async function webhook(req, res) {
     const address = data.address || data.government || "";
 
     // -------------------------
-    // 2) المنتج
+    // 2) أول منتج
     // -------------------------
     const firstItem = data.cart_items?.[0] || {};
     const productName = firstItem.product?.name || "منتجك";
-    const quantity = firstItem.quantity ?? 1;
+    const quantity = firstItem.quantity != null ? firstItem.quantity : 1;
 
     const toNumber = (v) => {
       const n = Number(v);
@@ -43,6 +50,7 @@ async function webhook(req, res) {
       toNumber(firstItem.price) ??
       toNumber(data.subtotal_cost) ??
       toNumber(data.subtotal) ??
+      toNumber(data.cost) ??
       null;
 
     const shippingCost =
@@ -54,39 +62,45 @@ async function webhook(req, res) {
         0
       ) ?? 0;
 
-    const total =
+    const totalWithShipping =
       toNumber(data.total_cost) ??
       (productPrice != null ? productPrice + shippingCost : null);
 
     // -------------------------
-    // 3) تفاصيل الطلب {{3}}
+    // 3) تفاصيل الطلب {{3}} (صيغة متوازنة وآمنة)
     // -------------------------
-    let orderDetails = address || "";
+    const shortProduct = (productName || "").toString().slice(0, 40);
+    const shipText = shippingCost > 0 ? `${shippingCost}` : "مجاني";
+    const totalText =
+      totalWithShipping != null
+        ? `${totalWithShipping}`
+        : productPrice != null
+        ? `${productPrice}`
+        : "";
 
-    orderDetails += ` - ${productName}`;
-    orderDetails += ` - الكمية: ${quantity}`;
+    const details =
+      `العنوان: ${address || "-"} | ` +
+      `المنتج: ${shortProduct || "-"} | ` +
+      `كمية: ${quantity} | ` +
+      `شحن: ${shipText} | ` +
+      `إجمالي: ${totalText}`;
 
-    if (productPrice != null) {
-      orderDetails += ` - سعر المنتج: ${productPrice}`;
-    }
-
-    if (shippingCost > 0) {
-      orderDetails += ` - الشحن: ${shippingCost}`;
-    } else {
-      orderDetails += ` - الشحن: مجاني`;
-    }
-
-    if (total != null) {
-      orderDetails += ` - الإجمالي: ${total}`;
-    }
+    const cleanParam = (text) => {
+      if (!text) return "";
+      return text.toString().replace(/[\r\n\t]+/g, " ").trim();
+    };
 
     // -------------------------
     // 4) Normalize Phone
     // -------------------------
     let raw = customerPhone.toString().replace(/[^0-9]/g, "");
 
-    if (raw.startsWith("01") && raw.length === 11) raw = "20" + raw.substring(1);
     if (raw.startsWith("05") && raw.length === 10) raw = "966" + raw.substring(1);
+    else if (raw.startsWith("01") && raw.length === 11) raw = "20" + raw.substring(1);
+    else if (raw.startsWith("09") && raw.length === 10) raw = "249" + raw.substring(1);
+    else if (raw.startsWith("7") && raw.length === 9) raw = "967" + raw;
+
+    console.log("📞 Normalized Phone:", raw);
 
     // -------------------------
     // 5) Paramedics Config
@@ -96,6 +110,7 @@ async function webhook(req, res) {
     const API_TOKEN = process.env.SAAS_API_TOKEN;
 
     if (!API_BASE_URL || !VENDOR_UID || !API_TOKEN) {
+      console.error("❌ Missing Environment Variables");
       return res.status(500).json({ error: "missing_env" });
     }
 
@@ -103,13 +118,12 @@ async function webhook(req, res) {
     // 6) Payload النهائي
     // -------------------------
     const payload = {
-      phone_number: String(raw),
+      phone_number: raw,
       template_name: "1st_utility",
-      template_language: "en",              // ✅ لازم en لأن Paramedics شايفها en
-      field_1: String(customerName),        // ✅ String
-      field_2: String(orderId),             // ✅ مهم جدًا يبقى String
-      field_3: String(orderDetails),        // ✅ String
-      // شيلنا contact عشان مش ضروري وقد يسبب رفض في بعض الحسابات
+      template_language: "en", // ✅ Paramedics شايفها en
+      field_1: cleanParam(customerName),
+      field_2: cleanParam(`${String(orderId)} ${storeTag}`),
+      field_3: cleanParam(details),
     };
 
     const endpoint = `${API_BASE_URL}/${VENDOR_UID}/contact/send-template-message`;
@@ -140,4 +154,5 @@ async function webhook(req, res) {
   }
 }
 
+// ✅ تصدير بصيغة CommonJS عشان Vercel
 module.exports = webhook;
