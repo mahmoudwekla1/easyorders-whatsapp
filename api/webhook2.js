@@ -1,12 +1,13 @@
 // api/webhook2.js
 
+const fetch = require("node-fetch");
+
 async function webhook(req, res) {
-  // ✅ Health Check
+  // Health check
   if (req.method === "GET") {
     return res.status(200).send("Webhook2 Running ✅");
   }
 
-  // ✅ Allow only POST (EasyOrders)
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
@@ -14,167 +15,111 @@ async function webhook(req, res) {
   try {
     const data = req.body || {};
 
-    // 🏪 Store Tag from URL: ?storeTag=EQ / GZ / BR
-    const storeTagRaw = (req.query && req.query.storeTag) || "";
+    // store tag
+    const storeTagRaw = req.query?.storeTag || "";
     const storeTag = storeTagRaw ? `[${storeTagRaw}]` : "";
     console.log("🏪 Store Tag:", storeTagRaw || "NO_TAG");
 
-    // 🧩 Template/Language from URL (optional)
-    const tpl = (req.query && req.query.tpl) || "1st_utillty"; // ✅ 2 L
-    const lang = (req.query && req.query.lang) || "en";
-    console.log("🧩 tpl/lang:", tpl, lang);
-
-    console.log("📦 FULL DATA:", JSON.stringify(data));
-
-    // -------------------------
-    // 1) Customer / Order Data
-    // -------------------------
+    // basic data
     const customerName =
-      data.full_name || data.name || data.customer_name || "Customer";
+      (data.full_name || "").trim() || "عميلنا العزيز";
 
     const customerPhone =
-      data.phone || data.phone_alt || data.customer_phone || "";
+      data.phone || data.phone_alt || "";
 
-    const orderId = data.short_id || data.order_id || data.id || "";
-    const address = data.address || data.government || "";
+    const orderId = data.short_id || data.id || "";
 
-    const firstItem = data.cart_items?.[0] || {};
-    const productName = firstItem.product?.name || "Product";
-    const quantity = firstItem.quantity != null ? firstItem.quantity : 1;
+    const address = data.address || "";
 
-    const toNumber = (v) => {
-      const n = Number(v);
-      return Number.isFinite(n) ? n : null;
-    };
-
-    const productPrice =
-      toNumber(firstItem.price) ??
-      toNumber(data.cost) ??
-      toNumber(data.total_cost) ??
-      null;
-
-    const shippingCost =
-      toNumber(
-        data.shipping_cost ??
-          data.shipping_fees ??
-          data.delivery_cost ??
-          data.shipping ??
-          0
-      ) ?? 0;
+    const item = data.cart_items?.[0] || {};
+    const productName = item.product?.name || "منتج";
+    const qty = item.quantity || 1;
 
     const total =
-      toNumber(data.total_cost) ??
-      (productPrice != null ? productPrice + shippingCost : null);
+      data.total_cost ??
+      data.cost ??
+      item.price ??
+      "";
+
+    // build {{3}}
+    let details = `العنوان: ${address}`;
+    details += ` | المنتج: ${productName}`;
+    details += ` | الكمية: ${qty}`;
+    if (total !== "") details += ` | الإجمالي: ${total}`;
+
+    const clean = (v) =>
+      v?.toString().replace(/[\r\n\t]+/g, " ").trim();
 
     // -------------------------
-    // 2) Helpers
+    // phone normalize
     // -------------------------
-    const cleanParam = (text) => {
-      if (!text) return "";
-      return text.toString().replace(/[\r\n\t]+/g, " ").trim();
-    };
+    let raw = customerPhone.toString().replace(/\D/g, "");
 
-    const short = (t, max = 40) => {
-      const s = cleanParam(t);
-      return s.length > max ? s.slice(0, max) : s;
-    };
+    // KSA
+    if (raw.startsWith("05") && raw.length === 10) {
+      raw = "966" + raw.slice(1);
+    }
+    // Egypt
+    else if (raw.startsWith("01") && raw.length === 11) {
+      raw = "20" + raw.slice(1);
+    }
 
-    // -------------------------
-    // 3) Build {{3}} (short & safe)
-    // -------------------------
-    let field3 = "";
-    field3 += `Addr:${short(address, 35)}`;
-    field3 += ` | Prod:${short(productName, 35)}`;
-    field3 += ` | Qty:${quantity}`;
-    field3 += ` | Ship:${shippingCost > 0 ? shippingCost : "FREE"}`;
-    field3 += ` | Total:${total != null ? total : (productPrice != null ? productPrice : "")}`;
+    console.log("📞 Normalized Phone:", raw);
 
     // -------------------------
-    // 4) Normalize Phone
+    // SaaS config
     // -------------------------
-    let raw = customerPhone.toString().replace(/[^0-9]/g, "");
-
-    // السعودية
-    if (raw.startsWith("05") && raw.length === 10) raw = "966" + raw.substring(1);
-    // مصر
-    else if (raw.startsWith("01") && raw.length === 11) raw = "20" + raw.substring(1);
-    // السودان
-    else if (raw.startsWith("09") && raw.length === 10) raw = "249" + raw.substring(1);
-    // اليمن
-    else if (raw.startsWith("7") && raw.length === 9) raw = "967" + raw;
-
-    const normalizedPhone = raw;
-    console.log("📞 Normalized Phone:", normalizedPhone);
-
-    // -------------------------
-    // 5) Paramedics Config
-    // -------------------------
-    const API_BASE_URL = process.env.SAAS_API_BASE_URL;
+    const API_BASE = process.env.SAAS_API_BASE_URL;
     const VENDOR_UID = process.env.SAAS_VENDOR_UID;
-    const API_TOKEN = process.env.SAAS_API_TOKEN;
+    const TOKEN = process.env.SAAS_API_TOKEN;
 
-    if (!API_BASE_URL || !VENDOR_UID || !API_TOKEN) {
-      console.error("❌ Missing Environment Variables");
+    if (!API_BASE || !VENDOR_UID || !TOKEN) {
       return res.status(500).json({ error: "missing_env" });
     }
 
     // -------------------------
-    // 6) ✅ Correct Params (IMPORTANT)
+    // ✅ FINAL PAYLOAD (AR ONLY)
     // -------------------------
-    const p1 = cleanParam(customerName);
-    const p2 = cleanParam(`${orderId} ${storeTag}`.trim());
-    const p3 = cleanParam(field3);
-
-    // ✅ THE KEY FIX:
-    // Paramedics checks body.localizable_params
     const payload = {
-      phone_number: normalizedPhone,
-      template_name: tpl,
-      template_language: lang,
+      phone_number: raw,
+      template_name: "first_utillty",
+      template_language: "ar",
 
-      // keep these (won't hurt)
-      field_1: p1,
-      field_2: p2,
-      field_3: p3,
-
-      // ✅ must exist here as strings
-      body: {
-        localizable_params: [p1, p2, p3],
-      },
-
-      // also keep top-level for compatibility
-      localizable_params: [p1, p2, p3],
+      field_1: clean(customerName),                 // {{1}}
+      field_2: clean(`${orderId} ${storeTag}`),      // {{2}}
+      field_3: clean(details),                       // {{3}}
 
       contact: {
-        first_name: p1,
-        phone_number: normalizedPhone,
+        first_name: clean(customerName),
+        phone_number: raw,
         country: "auto",
       },
     };
 
-    const endpoint = `${API_BASE_URL}/${VENDOR_UID}/contact/send-template-message`;
+    const endpoint = `${API_BASE}/${VENDOR_UID}/contact/send-template-message`;
 
     console.log("🚀 Sending to SaaS:", endpoint);
-    console.log("🧾 Payload:", JSON.stringify(payload));
+    console.log("🧾 Payload:", payload);
 
-    const saasRes = await fetch(endpoint, {
+    const r = await fetch(endpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${API_TOKEN}`,
+        Authorization: `Bearer ${TOKEN}`,
       },
       body: JSON.stringify(payload),
     });
 
-    const responseData = await saasRes.json().catch(() => null);
+    const resp = await r.json();
 
-    if (!saasRes.ok || (responseData && responseData.result === "failed")) {
-      console.error("❌ SaaS API Error:", responseData);
-      return res.status(500).json({ error: "saas_api_error", details: responseData });
+    if (!r.ok) {
+      console.error("❌ SaaS API Error:", resp);
+      return res.status(500).json(resp);
     }
 
-    console.log("✅ SaaS Response:", responseData);
-    return res.status(200).json({ status: "sent", data: responseData });
+    console.log("✅ Sent Successfully");
+    return res.status(200).json(resp);
+
   } catch (err) {
     console.error("❌ Webhook Error:", err);
     return res.status(500).json({ error: "internal_error" });
