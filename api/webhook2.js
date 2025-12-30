@@ -6,7 +6,7 @@ async function webhook(req, res) {
     return res.status(200).send("Webhook Running ✅");
   }
 
-  // ✅ Allow only POST (EasyOrders)
+  // ✅ Allow only POST
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
@@ -14,16 +14,11 @@ async function webhook(req, res) {
   try {
     const data = req.body || {};
 
-    // ✅ Debug كامل للـ payload (مؤقت)
+    // 🧪 لوج مؤقت (تشيله بعد التأكد)
     console.log("📦 FULL DATA:", JSON.stringify(data));
 
-    // 🆕 قراءة التاج من الويبهوك URL ?storeTag=EQ / GZ / BR
-    const storeTagRaw = (req.query && req.query.storeTag) || "";
-    const storeTag = storeTagRaw ? `[${storeTagRaw}]` : "";
-    console.log("🏪 Store Tag:", storeTagRaw || "NO_TAG");
-
     // -------------------------
-    // 1) بيانات العميل والطلب
+    // 1) بيانات العميل
     // -------------------------
     const customerName =
       data.full_name || data.name || data.customer_name || "عميلنا العزيز";
@@ -34,144 +29,102 @@ async function webhook(req, res) {
     const orderId = data.short_id || data.order_id || data.id || "";
     const address = data.address || data.government || "";
 
-    // 🔹 أول عنصر في السلة
+    // -------------------------
+    // 2) المنتج
+    // -------------------------
     const firstItem = data.cart_items?.[0] || {};
     const productName = firstItem.product?.name || "منتجك";
     const quantity = firstItem.quantity != null ? firstItem.quantity : 1;
 
-    // ✅ تنظيف الباراميترات (مفيش سطور جديدة أو Tabs)
-    const cleanParam = (text) => {
-      if (!text) return "";
-      return text.toString().replace(/[\r\n\t]+/g, " ").trim();
-    };
+    // -------------------------
+    // Helpers
+    // -------------------------
+    const cleanParam = (text) =>
+      text ? text.toString().replace(/[\r\n\t]+/g, " ").trim() : "";
 
-    // ✅ Helper لتحويل أي رقم بشكل آمن
     const toNumber = (v) => {
-      if (v === null || v === undefined || v === "") return null;
       const n = Number(v);
       return Number.isFinite(n) ? n : null;
     };
 
     // -------------------------
-    // 1.1) حساب السعر + الشحن + الإجمالي
+    // 3) الأسعار
     // -------------------------
-
-    // ✅ سعر المنتج (نحاول نجيبه من أكتر من مكان)
     const productPrice =
       toNumber(firstItem.price) ??
-      toNumber(firstItem.total) ??
       toNumber(data.subtotal_cost) ??
       toNumber(data.subtotal) ??
-      toNumber(data.items_total) ??
       null;
 
-    // ✅ الشحن (نجرب كذا مفتاح شائع)
-    const shippingCostRaw =
-      data.shipping_cost ??
-      data.shipping_fees ??
-      data.delivery_cost ??
-      data.shipping_price ??
-      data.shipping ??
-      data.delivery_fee ??
-      data.deliveryFees ??
-      0;
+    const shippingCost =
+      toNumber(
+        data.shipping_cost ??
+        data.shipping_fees ??
+        data.delivery_cost ??
+        data.shipping ??
+        0
+      ) ?? 0;
 
-    const shippingCost = toNumber(shippingCostRaw) ?? 0;
-
-    // ✅ إجمالي المنصة (لو موجود)
-    const platformTotal =
-      toNumber(data.total_cost) ??
-      toNumber(data.total) ??
-      toNumber(data.cost) ??
-      null;
-
-    // ✅ الإجمالي النهائي
     const totalWithShipping =
-      platformTotal != null
-        ? platformTotal
-        : productPrice != null
-        ? productPrice + shippingCost
-        : null;
+      toNumber(data.total_cost) ??
+      (productPrice != null ? productPrice + shippingCost : null);
 
     // -------------------------
-    // 2) توحيد صيغة رقم الموبايل
+    // 4) Normalize Phone
     // -------------------------
     let raw = customerPhone.toString().replace(/[^0-9]/g, "");
 
-    // السعودية
-    if (raw.startsWith("05") && raw.length === 10) {
-      raw = "966" + raw.substring(1);
-    }
-    // مصر
-    else if (raw.startsWith("01") && raw.length === 11) {
-      raw = "20" + raw.substring(1);
-    }
-    // السودان
-    else if (raw.startsWith("09") && raw.length === 10) {
-      raw = "249" + raw.substring(1);
-    }
-    // اليمن
-    else if (raw.startsWith("7") && raw.length === 9) {
-      raw = "967" + raw;
-    }
+    if (raw.startsWith("05") && raw.length === 10) raw = "966" + raw.substring(1);
+    else if (raw.startsWith("01") && raw.length === 11) raw = "20" + raw.substring(1);
 
-    const normalizedPhone = raw;
-    console.log("📞 Normalized Phone:", normalizedPhone);
+    console.log("📞 Normalized Phone:", raw);
 
     // -------------------------
-    // 3) متغيرات SaaS (Paramedics)
+    // 5) Paramedics Config
     // -------------------------
     const API_BASE_URL = process.env.SAAS_API_BASE_URL;
     const VENDOR_UID = process.env.SAAS_VENDOR_UID;
     const API_TOKEN = process.env.SAAS_API_TOKEN;
 
     if (!API_BASE_URL || !VENDOR_UID || !API_TOKEN) {
-      console.error("❌ Missing Environment Variables");
       return res.status(500).json({ error: "missing_env" });
     }
 
     // -------------------------
-    // 4) تركيب field_3
+    // 6) رسالة الطلب
     // -------------------------
-    let addressAndProduct = address || "";
+    let message = address || "";
 
-    if (productName) {
-      addressAndProduct += (addressAndProduct ? " - " : "") + productName;
-    }
-    if (quantity) {
-      addressAndProduct += ` - الكمية: ${quantity}`;
-    }
+    message += ` - ${productName}`;
+    message += ` - الكمية: ${quantity}`;
 
-    // ✅ عرض الأسعار
     if (productPrice != null) {
-      addressAndProduct += ` - سعر المنتج: ${productPrice}`;
+      message += ` - سعر المنتج: ${productPrice}`;
     }
 
-    // ✅ الشحن: لو 0 => مجاني
     if (shippingCost > 0) {
-      addressAndProduct += ` - الشحن: ${shippingCost}`;
+      message += ` - الشحن: ${shippingCost}`;
     } else {
-      addressAndProduct += ` - الشحن: مجاني`;
+      message += ` - الشحن: مجاني`;
     }
 
-    // ✅ الإجمالي
     if (totalWithShipping != null) {
-      addressAndProduct += ` - الإجمالي: ${totalWithShipping}`;
+      message += ` - الإجمالي: ${totalWithShipping}`;
     }
 
     // -------------------------
-    // 5) Payload الخاص بالتمبلت
+    // 7) Payload (✔ التمبلت الصح)
     // -------------------------
     const payload = {
-      phone_number: normalizedPhone,
-      template_name: "1st_utility",
+      phone_number: raw,
+      template_name: "1st_utility", // ✅ التمبلت الموجود عندك
       template_language: "en",
       field_1: cleanParam(customerName),
-      field_2: cleanParam(`${orderId} ${storeTag}`.trim()),
-      field_3: cleanParam(addressAndProduct),
+      field_2: cleanParam(orderId),
+      field_3: cleanParam(message),
       contact: {
         first_name: cleanParam(customerName),
-        phone_number: normalizedPhone,
+        phone_number: raw,
         country: "auto",
       },
     };
@@ -193,18 +146,15 @@ async function webhook(req, res) {
 
     if (!saasRes.ok) {
       console.error("❌ SaaS API Error:", responseData);
-      return res
-        .status(500)
-        .json({ error: "saas_api_error", details: responseData });
+      return res.status(500).json({ error: "saas_api_error", details: responseData });
     }
 
     console.log("✅ SaaS Response:", responseData);
-    return res.status(200).json({ status: "sent", data: responseData });
+    return res.status(200).json({ status: "sent" });
   } catch (err) {
     console.error("❌ Webhook Error:", err);
     return res.status(500).json({ error: "internal_error" });
   }
 }
 
-// ✅ تصدير بصيغة CommonJS عشان Vercel
 module.exports = webhook;
