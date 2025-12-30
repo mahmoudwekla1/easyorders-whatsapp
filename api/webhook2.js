@@ -20,7 +20,7 @@ async function webhook(req, res) {
     console.log("🏪 Store Tag:", storeTagRaw || "NO_TAG");
 
     // 🧩 Template/Language from URL (optional)
-    const tpl = (req.query && req.query.tpl) || "1st_utillty"; // ✅ template name (2 L)
+    const tpl = (req.query && req.query.tpl) || "1st_utillty"; // ✅ 2 L
     const lang = (req.query && req.query.lang) || "en";
     console.log("🧩 tpl/lang:", tpl, lang);
 
@@ -38,12 +38,10 @@ async function webhook(req, res) {
     const orderId = data.short_id || data.order_id || data.id || "";
     const address = data.address || data.government || "";
 
-    // First cart item
     const firstItem = data.cart_items?.[0] || {};
     const productName = firstItem.product?.name || "Product";
     const quantity = firstItem.quantity != null ? firstItem.quantity : 1;
 
-    // Prices
     const toNumber = (v) => {
       const n = Number(v);
       return Number.isFinite(n) ? n : null;
@@ -69,14 +67,21 @@ async function webhook(req, res) {
       (productPrice != null ? productPrice + shippingCost : null);
 
     // -------------------------
-    // 2) Build field_3 ({{3}}) short & clean
+    // 2) Helpers
     // -------------------------
-    // (اختصاره عشان يقلل مشاكل الـ held/dropped + يمنع طول زيادة)
-    const short = (t, max = 45) => {
-      const s = (t || "").toString().trim();
+    const cleanParam = (text) => {
+      if (!text) return "";
+      return text.toString().replace(/[\r\n\t]+/g, " ").trim();
+    };
+
+    const short = (t, max = 40) => {
+      const s = cleanParam(t);
       return s.length > max ? s.slice(0, max) : s;
     };
 
+    // -------------------------
+    // 3) Build {{3}} (short & safe)
+    // -------------------------
     let field3 = "";
     field3 += `Addr:${short(address, 35)}`;
     field3 += ` | Prod:${short(productName, 35)}`;
@@ -85,34 +90,18 @@ async function webhook(req, res) {
     field3 += ` | Total:${total != null ? total : (productPrice != null ? productPrice : "")}`;
 
     // -------------------------
-    // 3) Clean helper (remove newlines/tabs)
-    // -------------------------
-    const cleanParam = (text) => {
-      if (!text) return "";
-      return text.toString().replace(/[\r\n\t]+/g, " ").trim();
-    };
-
-    // -------------------------
     // 4) Normalize Phone
     // -------------------------
     let raw = customerPhone.toString().replace(/[^0-9]/g, "");
 
     // السعودية
-    if (raw.startsWith("05") && raw.length === 10) {
-      raw = "966" + raw.substring(1);
-    }
+    if (raw.startsWith("05") && raw.length === 10) raw = "966" + raw.substring(1);
     // مصر
-    else if (raw.startsWith("01") && raw.length === 11) {
-      raw = "20" + raw.substring(1);
-    }
+    else if (raw.startsWith("01") && raw.length === 11) raw = "20" + raw.substring(1);
     // السودان
-    else if (raw.startsWith("09") && raw.length === 10) {
-      raw = "249" + raw.substring(1);
-    }
+    else if (raw.startsWith("09") && raw.length === 10) raw = "249" + raw.substring(1);
     // اليمن
-    else if (raw.startsWith("7") && raw.length === 9) {
-      raw = "967" + raw;
-    }
+    else if (raw.startsWith("7") && raw.length === 9) raw = "967" + raw;
 
     const normalizedPhone = raw;
     console.log("📞 Normalized Phone:", normalizedPhone);
@@ -130,21 +119,34 @@ async function webhook(req, res) {
     }
 
     // -------------------------
-    // 6) Payload (✅ correct for your template)
+    // 6) ✅ Correct Params (IMPORTANT)
     // -------------------------
-    // ✅ WhatsApp template variables MUST be array of strings:
-    // localizable_params: [ {{1}}, {{2}}, {{3}} ]
+    const p1 = cleanParam(customerName);
+    const p2 = cleanParam(`${orderId} ${storeTag}`.trim());
+    const p3 = cleanParam(field3);
+
+    // ✅ THE KEY FIX:
+    // Paramedics checks body.localizable_params
     const payload = {
       phone_number: normalizedPhone,
-      template_name: tpl,              // "1st_utillty"
-      template_language: lang,         // "en"
-      localizable_params: [
-        cleanParam(customerName),                     // {{1}}
-        cleanParam(`${orderId} ${storeTag}`.trim()),  // {{2}}
-        cleanParam(field3),                           // {{3}}
-      ],
+      template_name: tpl,
+      template_language: lang,
+
+      // keep these (won't hurt)
+      field_1: p1,
+      field_2: p2,
+      field_3: p3,
+
+      // ✅ must exist here as strings
+      body: {
+        localizable_params: [p1, p2, p3],
+      },
+
+      // also keep top-level for compatibility
+      localizable_params: [p1, p2, p3],
+
       contact: {
-        first_name: cleanParam(customerName),
+        first_name: p1,
         phone_number: normalizedPhone,
         country: "auto",
       },
@@ -168,10 +170,7 @@ async function webhook(req, res) {
 
     if (!saasRes.ok || (responseData && responseData.result === "failed")) {
       console.error("❌ SaaS API Error:", responseData);
-      return res.status(500).json({
-        error: "saas_api_error",
-        details: responseData,
-      });
+      return res.status(500).json({ error: "saas_api_error", details: responseData });
     }
 
     console.log("✅ SaaS Response:", responseData);
