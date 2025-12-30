@@ -1,12 +1,10 @@
 // api/webhook2.js
 
 async function webhook(req, res) {
-  // ✅ Health Check
   if (req.method === "GET") {
     return res.status(200).send("Webhook2 Running ✅");
   }
 
-  // ✅ Allow only POST
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
@@ -19,11 +17,12 @@ async function webhook(req, res) {
     // =========================
     const storeTagRaw = (req.query && req.query.storeTag) || "";
     const storeTag = storeTagRaw ? `[${storeTagRaw}]` : "";
+
     const lang = ((req.query && req.query.lang) || "en").toString().toLowerCase();
 
-    // ✅ templates عندك:
-    // EN:  1st_utillty
-    // AR:  first_utillty
+    // ✅ اسم التمبلت عندك (بالغلط الإملائي نفسه)
+    // EN: 1st_utillty
+    // AR: first_utillty
     let tpl = (req.query && req.query.tpl) ? req.query.tpl.toString() : "";
     if (!tpl) tpl = lang === "ar" ? "first_utillty" : "1st_utillty";
 
@@ -44,7 +43,7 @@ async function webhook(req, res) {
       return Number.isFinite(n) ? n : null;
     };
 
-    const asTextParam = (value) => ({
+    const asText = (value) => ({
       type: "text",
       text: cleanParam(value),
     });
@@ -61,12 +60,10 @@ async function webhook(req, res) {
     const orderId = data.short_id || data.order_id || data.id || "";
     const address = data.address || data.government || "";
 
-    // المنتج
     const firstItem = data.cart_items?.[0] || {};
     const productName = firstItem.product?.name || "منتجك";
     const quantity = firstItem.quantity != null ? firstItem.quantity : 1;
 
-    // الأسعار
     const productPrice =
       toNumber(firstItem.price) ??
       toNumber(data.cost) ??
@@ -89,10 +86,10 @@ async function webhook(req, res) {
       (productPrice != null ? productPrice + shippingCost : null);
 
     // =========================
-    // 2) field_3 (مختصر وآمن)
+    // 2) تفاصيل مختصرة وآمنة (field_3 / param3)
     // =========================
     const safeProductName = cleanParam(productName).slice(0, 35);
-    const safeAddress = cleanParam(address).slice(0, 60);
+    const safeAddress = cleanParam(address).slice(0, 70);
 
     const shipText = shippingCost > 0 ? `${shippingCost}` : "FREE";
     const totalText = total != null ? `${total}` : (productPrice != null ? `${productPrice}` : "");
@@ -109,26 +106,16 @@ async function webhook(req, res) {
     // =========================
     let raw = customerPhone.toString().replace(/[^0-9]/g, "");
 
-    // السعودية (05xxxxxxxx) => 9665xxxxxxxx
-    if (raw.startsWith("05") && raw.length === 10) {
-      raw = "966" + raw.substring(1);
-    }
-    // السعودية (5xxxxxxxx) => 9665xxxxxxxx
-    else if (raw.startsWith("5") && raw.length === 9) {
-      raw = "966" + raw;
-    }
-    // مصر (01xxxxxxxxx) => 201xxxxxxxxx
-    else if (raw.startsWith("01") && raw.length === 11) {
-      raw = "20" + raw.substring(1);
-    }
-    // السودان (09xxxxxxxx) => 2499xxxxxxxx
-    else if (raw.startsWith("09") && raw.length === 10) {
-      raw = "249" + raw.substring(1);
-    }
-    // اليمن (7xxxxxxxx) => 9677xxxxxxxx
-    else if (raw.startsWith("7") && raw.length === 9) {
-      raw = "967" + raw;
-    }
+    // السعودية 05xxxxxxxx => 9665xxxxxxxx
+    if (raw.startsWith("05") && raw.length === 10) raw = "966" + raw.substring(1);
+    // السعودية 5xxxxxxxx => 9665xxxxxxxx
+    else if (raw.startsWith("5") && raw.length === 9) raw = "966" + raw;
+    // مصر 01xxxxxxxxx => 201xxxxxxxxx
+    else if (raw.startsWith("01") && raw.length === 11) raw = "20" + raw.substring(1);
+    // السودان 09xxxxxxxx => 2499xxxxxxxx
+    else if (raw.startsWith("09") && raw.length === 10) raw = "249" + raw.substring(1);
+    // اليمن 7xxxxxxxx => 9677xxxxxxxx
+    else if (raw.startsWith("7") && raw.length === 9) raw = "967" + raw;
 
     const normalizedPhone = raw;
     console.log("📞 Normalized Phone:", normalizedPhone);
@@ -146,37 +133,40 @@ async function webhook(req, res) {
     }
 
     // =========================
-    // 5) ✅ localizable_params (3 params) بصيغة OBJECTS
+    // 5) Parameters (3)
     // =========================
-    const p1 = cleanParam(customerName);                  // {{1}}
-    const p2 = cleanParam(`${orderId} ${storeTag}`.trim()); // {{2}}
-    const p3 = cleanParam(details);                       // {{3}}
+    const p1 = cleanParam(customerName);
+    const p2 = cleanParam(`${orderId} ${storeTag}`.trim());
+    const p3 = cleanParam(details);
 
-    const localizableParams = [asTextParam(p1), asTextParam(p2), asTextParam(p3)];
+    // ✅ WhatsApp official format
+    const components = [
+      {
+        type: "body",
+        parameters: [asText(p1), asText(p2), asText(p3)],
+      },
+    ];
 
     // =========================
-    // 6) Payload (بنحط localizable_params في كذا مكان عشان اختلافات الـ SaaS)
+    // 6) Payload (components هو الأهم)
     // =========================
     const payload = {
       phone_number: normalizedPhone,
       template_name: tpl,
       template_language: lang,
 
-      // ✅ بعض الأنظمة تقراها هنا
-      localizable_params: localizableParams,
+      // ✅ ده اللي ميتا بتفهمه 100%
+      components,
 
-      // ✅ بعض الأنظمة تقراها جوه body
-      body: {
-        localizable_params: localizableParams,
-      },
-
-      // ✅ Fallback للقديم (لو بيقرأ field_1..3)
+      // ✅ فallbacks (لو Paramedics بيقرأهم)
+      body: { localizable_params: [p1, p2, p3] },
+      localizable_params: [p1, p2, p3],
       field_1: p1,
       field_2: p2,
       field_3: p3,
 
       contact: {
-        first_name: cleanParam(customerName),
+        first_name: p1,
         phone_number: normalizedPhone,
         country: "auto",
       },
