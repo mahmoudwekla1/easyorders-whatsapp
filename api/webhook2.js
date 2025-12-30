@@ -1,9 +1,7 @@
 // api/webhook2.js
 
 async function webhook2(req, res) {
-  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
-  res.setHeader("Pragma", "no-cache");
-  res.setHeader("Expires", "0");
+  res.setHeader("Cache-Control", "no-store");
 
   if (req.method === "GET") {
     console.log("✅ GET HIT:", req.url);
@@ -18,15 +16,20 @@ async function webhook2(req, res) {
     const data = req.body || {};
     console.log("📦 FULL DATA:", JSON.stringify(data));
 
+    // ✅ storeTag من اللينك
     const storeTagRaw = (req.query && req.query.storeTag) || "EQ";
     const storeTag = storeTagRaw ? `[${storeTagRaw}]` : "";
 
-    const tpl = (req.query && req.query.tpl) || "1st_utillty";
+    // ✅ tpl/lang من اللينك (مع default صح)
+    const tpl = (req.query && req.query.tpl) || "1st_utility";
     const lang = (req.query && req.query.lang) || "en";
 
     console.log("🏪 Store Tag:", storeTagRaw || "NO_TAG");
     console.log("🧩 tpl/lang:", tpl, lang);
 
+    // -------------------------
+    // 1) بيانات العميل
+    // -------------------------
     const customerName =
       data.full_name || data.name || data.customer_name || "عميلنا العزيز";
 
@@ -36,6 +39,9 @@ async function webhook2(req, res) {
     const orderId = data.short_id || data.order_id || data.id || "";
     const address = data.address || data.government || "";
 
+    // -------------------------
+    // 2) المنتج
+    // -------------------------
     const firstItem = data.cart_items?.[0] || {};
     const productName = firstItem.product?.name || "منتجك";
     const quantity = firstItem.quantity != null ? firstItem.quantity : 1;
@@ -58,18 +64,20 @@ async function webhook2(req, res) {
     const shippingCost =
       toNumber(
         data.shipping_cost ??
-        data.shipping_fees ??
-        data.delivery_cost ??
-        data.shipping ??
-        data.expense ??
-        0
+          data.shipping_fees ??
+          data.delivery_cost ??
+          data.shipping ??
+          data.expense ??
+          0
       ) ?? 0;
 
     const total =
       toNumber(data.total_cost) ??
       (productPrice != null ? productPrice + shippingCost : null);
 
-    // ✅ message قصير “آمن”
+    // -------------------------
+    // 3) رسالة مختصرة (أضمن للـ delivery)
+    // -------------------------
     const safeAddress = cleanParam(address).slice(0, 40);
     const safeProduct = cleanParam(productName).slice(0, 35);
     const shipText = shippingCost > 0 ? `${shippingCost}` : "FREE";
@@ -80,8 +88,11 @@ async function webhook2(req, res) {
       ` | Ship:${shipText}` +
       (totalText ? ` | Total:${totalText}` : "");
 
-    // ✅ Normalize phone
+    // -------------------------
+    // 4) Normalize Phone
+    // -------------------------
     let raw = customerPhone.toString().replace(/[^0-9]/g, "");
+
     if (raw.startsWith("05") && raw.length === 10) raw = "966" + raw.substring(1);
     else if (raw.startsWith("01") && raw.length === 11) raw = "20" + raw.substring(1);
     else if (raw.startsWith("09") && raw.length === 10) raw = "249" + raw.substring(1);
@@ -90,7 +101,9 @@ async function webhook2(req, res) {
     const normalizedPhone = raw;
     console.log("📞 Normalized Phone:", normalizedPhone);
 
-    // ✅ ENV
+    // -------------------------
+    // 5) ENV
+    // -------------------------
     const API_BASE_URL = process.env.SAAS_API_BASE_URL;
     const VENDOR_UID = process.env.SAAS_VENDOR_UID;
     const API_TOKEN = process.env.SAAS_API_TOKEN;
@@ -102,16 +115,18 @@ async function webhook2(req, res) {
 
     const endpoint = `${API_BASE_URL}/${VENDOR_UID}/contact/send-template-message`;
 
-    // ✅✅ IMPORTANT: send params as localizable_params array
+    // ✅✅ هنا التعديل المهم: localizable_params جوا body
     const payload = {
       phone_number: normalizedPhone,
-      template_name: tpl,
-      template_language: lang,
-      localizable_params: [
-        cleanParam(customerName),                     // {{1}}
-        cleanParam(`${orderId} ${storeTag}`.trim()),  // {{2}}
-        cleanParam(field3),                           // {{3}}
-      ],
+      template_name: tpl,                 // 1st_utility
+      template_language: lang,            // en
+      body: {
+        localizable_params: [
+          cleanParam(customerName),                      // {{1}}
+          cleanParam(`${orderId} ${storeTag}`.trim()),   // {{2}}
+          cleanParam(field3),                            // {{3}}
+        ],
+      },
       contact: {
         first_name: cleanParam(customerName),
         phone_number: normalizedPhone,
@@ -133,7 +148,7 @@ async function webhook2(req, res) {
     const responseData = await saasRes.json().catch(() => null);
     console.log("✅ SaaS Response:", responseData);
 
-    // نخليها 200 حتى لا يعيد EasyOrders المحاولة بعنف
+    // نخليها 200 عشان EasyOrders مايعيدش بشكل مزعج
     if (!saasRes.ok) {
       return res.status(200).json({ status: "saas_failed", data: responseData });
     }
