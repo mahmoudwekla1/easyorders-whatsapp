@@ -12,7 +12,7 @@ async function webhook(req, res) {
   try {
     const data = req.body || {};
 
-    console.log("🔥 WEBHOOK2 VERSION = AR TEMPLATE");
+    console.log("🔥 WEBHOOK2 VERSION = 1st_utility (LANG=en)");
     console.log("📦 FULL DATA:", JSON.stringify(data));
 
     // -------------------------
@@ -103,17 +103,18 @@ async function webhook(req, res) {
     // 6) Payload النهائي
     // -------------------------
     const payload = {
-      phone_number: raw,
+      phone_number: String(raw),
       template_name: "1st_utility",
-      template_language: "ar",
-      field_1: customerName,   // {{1}}
-      field_2: orderId,        // {{2}}
-      field_3: orderDetails,   // {{3}}
+      template_language: "en",              // ✅ لازم en لأن Paramedics شايفها en
+      field_1: String(customerName),        // ✅ String
+      field_2: String(orderId),             // ✅ مهم جدًا يبقى String
+      field_3: String(orderDetails),        // ✅ String
+      // شيلنا contact عشان مش ضروري وقد يسبب رفض في بعض الحسابات
     };
 
     const endpoint = `${API_BASE_URL}/${VENDOR_UID}/contact/send-template-message`;
 
-    console.log("🚀 Sending to SaaS:", payload);
+    console.log("🚀 Sending to SaaS:", endpoint, payload);
 
     const saasRes = await fetch(endpoint, {
       method: "POST",
@@ -132,7 +133,7 @@ async function webhook(req, res) {
     }
 
     console.log("✅ SaaS Response:", responseData);
-    return res.status(200).json({ status: "sent" });
+    return res.status(200).json({ status: "sent", data: responseData });
   } catch (err) {
     console.error("❌ Webhook Error:", err);
     return res.status(500).json({ error: "internal_error" });
