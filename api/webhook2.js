@@ -1,4 +1,4 @@
-// api/webhook2.js
+// api/webhook.js
 
 async function webhook(req, res) {
   // ✅ Health Check
@@ -92,9 +92,9 @@ async function webhook(req, res) {
     // -------------------------
     // 3) متغيرات SaaS (Paramedics)
     // -------------------------
-    const API_BASE_URL = (process.env.SAAS_API_BASE_URL || "").trim();
-    const VENDOR_UID = (process.env.SAAS_VENDOR_UID || "").trim();
-    const API_TOKEN = (process.env.SAAS_API_TOKEN || "").trim();
+    const API_BASE_URL = process.env.SAAS_API_BASE_URL;
+    const VENDOR_UID = process.env.SAAS_VENDOR_UID;
+    const API_TOKEN = process.env.SAAS_API_TOKEN;
 
     if (!API_BASE_URL || !VENDOR_UID || !API_TOKEN) {
       console.error("❌ Missing Environment Variables");
@@ -102,32 +102,24 @@ async function webhook(req, res) {
     }
 
     // -------------------------
-    // 4) Payload الخاص بالتمبلت (✅ body_params)
+    // 4) Payload الخاص بالتمبلت
     // -------------------------
-    const p1 = cleanParam(customerName); // {{1}}
-    const p2 = cleanParam(`${orderId} ${storeTag}`.trim()); // {{2}}
-    const p3 = cleanParam(addressAndProduct); // {{3}}
-
     const payload = {
       phone_number: normalizedPhone,
       template_name: "1st_utillty",
-      template_language: "en", // ✅ زي ما التمبلت متسجل عندك حتى لو عربي
-
-      // ✅ المهم: 3 body params
-      body_params: [
-        { type: "text", text: p1 },
-        { type: "text", text: p2 },
-        { type: "text", text: p3 },
-      ],
-
+      template_language: "en", // نفس اللغة اللي في التمبلت
+      field_1: cleanParam(customerName),                        // {{1}} اسم العميل
+      field_2: cleanParam(`${orderId} ${storeTag}`.trim()),     // 🆕 {{2}} رقم الطلب + [EQ]/[GZ]/[BR]
+      field_3: cleanParam(addressAndProduct),                   // {{3}} العنوان + المنتج + الكمية + السعر
       contact: {
-        first_name: p1,
+        first_name: cleanParam(customerName),
         phone_number: normalizedPhone,
         country: "auto",
       },
     };
 
     const endpoint = `${API_BASE_URL}/${VENDOR_UID}/contact/send-template-message`;
+
     console.log("🚀 Sending to SaaS:", endpoint, payload);
 
     const saasRes = await fetch(endpoint, {
@@ -143,10 +135,9 @@ async function webhook(req, res) {
 
     if (!saasRes.ok) {
       console.error("❌ SaaS API Error:", responseData);
-      return res.status(500).json({
-        error: "saas_api_error",
-        details: responseData,
-      });
+      return res
+        .status(500)
+        .json({ error: "saas_api_error", details: responseData });
     }
 
     console.log("✅ SaaS Response:", responseData);
