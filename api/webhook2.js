@@ -1,4 +1,4 @@
-// api/webhook.js
+// api/webhook2.js
 
 async function webhook(req, res) {
   // ✅ Health Check
