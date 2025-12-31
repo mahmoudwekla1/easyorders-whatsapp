@@ -102,28 +102,32 @@ async function webhook(req, res) {
     }
 
     // -------------------------
-    // 4) Payload الخاص بالتمبلت
+    // 4) Payload الخاص بالتمبلت (✅ body_params)
     // -------------------------
+    const p1 = cleanParam(customerName); // {{1}}
+    const p2 = cleanParam(`${orderId} ${storeTag}`.trim()); // {{2}}
+    const p3 = cleanParam(addressAndProduct); // {{3}}
+
     const payload = {
       phone_number: normalizedPhone,
-
-      // ✅ المطلوب منك هنا
       template_name: "1st_utillty",
-      template_language: "en",
+      template_language: "en", // ✅ زي ما التمبلت متسجل عندك حتى لو عربي
 
-      field_1: cleanParam(customerName),                    // {{1}} اسم العميل
-      field_2: cleanParam(`${orderId} ${storeTag}`.trim()), // {{2}} رقم الطلب + [EQ]/[GZ]/[BR]
-      field_3: cleanParam(addressAndProduct),               // {{3}} العنوان + المنتج + الكمية + السعر
+      // ✅ المهم: 3 body params
+      body_params: [
+        { type: "text", text: p1 },
+        { type: "text", text: p2 },
+        { type: "text", text: p3 },
+      ],
 
       contact: {
-        first_name: cleanParam(customerName),
+        first_name: p1,
         phone_number: normalizedPhone,
         country: "auto",
       },
     };
 
     const endpoint = `${API_BASE_URL}/${VENDOR_UID}/contact/send-template-message`;
-
     console.log("🚀 Sending to SaaS:", endpoint, payload);
 
     const saasRes = await fetch(endpoint, {
