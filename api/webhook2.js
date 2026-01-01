@@ -1,77 +1,56 @@
 // api/webhook.js
 
-module.exports = async function webhook(req, res) {
-  // ✅ Health Check
-  if (req.method === "GET") {
-    return res.status(200).send("Webhook Running ✅");
-  }
-
-  // ✅ Allow only POST
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
+async function webhook(req, res) {
+  if (req.method === "GET") return res.status(200).send("Webhook Running ✅");
+  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   try {
     const data = req.body || {};
-
-    // ✅ قراءة التاج من الـ query
-    const storeTagRaw = (req.query && req.query.storeTag) ? String(req.query.storeTag) : "";
+    
+    // قراءة التاج
+    const storeTagRaw = (req.query && req.query.storeTag) || "";
     const storeTag = storeTagRaw ? `[${storeTagRaw}]` : "";
 
     // -------------------------
     // 1) تجهيز البيانات
     // -------------------------
-    const customerName =
-      data.full_name || data.name || data.customer_name || "عميلنا العزيز";
+    const customerName = data.full_name || data.name || data.customer_name || "عميلنا العزيز";
+    const customerPhone = data.phone || data.phone_alt || data.customer_phone || "";
+    const orderId = data.short_id || data.order_id || data.id || "";
+    const address = data.address || data.government || "";
 
-    const customerPhone =
-      data.phone || data.phone_alt || data.customer_phone || "";
+    const firstItem = data.cart_items?.[0] || {};
+    const productName = firstItem.product?.name || "منتجك";
+    const quantity = firstItem.quantity != null ? firstItem.quantity : 1;
+    
+    const price = firstItem.price != null ? firstItem.price 
+                : data.total_cost != null ? data.total_cost 
+                : data.cost != null ? data.cost : "";
 
-    const orderId =
-      data.short_id || data.order_id || data.id || "";
-
-    const address =
-      data.address || data.government || data.city || "";
-
-    const firstItem = (data.cart_items && data.cart_items[0]) ? data.cart_items[0] : {};
-    const productName = (firstItem.product && firstItem.product.name) ? firstItem.product.name : "منتجك";
-    const quantity = (firstItem.quantity != null) ? firstItem.quantity : 1;
-
-    const price =
-      (firstItem.price != null) ? firstItem.price
-      : (data.total_cost != null) ? data.total_cost
-      : (data.cost != null) ? data.cost
-      : "";
-
-    // تركيب الملخص
+    // تركيب المتغير الثالث
     let addressAndProduct = address || "";
     if (productName) addressAndProduct += (addressAndProduct ? " - " : "") + productName;
     if (quantity) addressAndProduct += ` - الكمية: ${quantity}`;
     if (price !== "") addressAndProduct += ` - السعر: ${price}`;
 
     const cleanParam = (text) => {
-      if (text == null) return "";
-      return String(text).replace(/[\r\n\t]+/g, " ").trim();
+      if (!text) return "";
+      return text.toString().replace(/[\r\n\t]+/g, " ").trim();
     };
 
     // -------------------------
     // 2) توحيد رقم الهاتف
     // -------------------------
-    let raw = String(customerPhone).replace(/[^0-9]/g, "");
-
-    // KSA: 05xxxxxxxx -> 9665xxxxxxxx
+    let raw = customerPhone.toString().replace(/[^0-9]/g, "");
     if (raw.startsWith("05") && raw.length === 10) raw = "966" + raw.substring(1);
-    // EG: 01xxxxxxxxx -> 20xxxxxxxxxx
     else if (raw.startsWith("01") && raw.length === 11) raw = "20" + raw.substring(1);
-    // SD: 09xxxxxxxx -> 249xxxxxxxxx
     else if (raw.startsWith("09") && raw.length === 10) raw = "249" + raw.substring(1);
-    // YE: 7xxxxxxxx -> 9677xxxxxxxx
     else if (raw.startsWith("7") && raw.length === 9) raw = "967" + raw;
-
+    
     const normalizedPhone = raw;
 
     // -------------------------
-    // 3) ENV
+    // 3) متغيرات البيئة
     // -------------------------
     const API_BASE_URL = process.env.SAAS_API_BASE_URL;
     const VENDOR_UID = process.env.SAAS_VENDOR_UID;
@@ -82,15 +61,28 @@ module.exports = async function webhook(req, res) {
     }
 
     // -------------------------
-    // 4) Payload
+    // 4) Payload حسب التوثيق (The Documentation Way)
     // -------------------------
+    
+    /* تنبيه هام:
+       1. تأكد أن اسم القالب "1st_utillty" مكتوب بدقة (هل هو utillty أم utility؟).
+       2. تم تغيير اللغة إلى "en_US" لأن "en" غالباً تسبب مشاكل في المطابقة.
+       3. عدنا لاستخدام field_1, field_2 كما في التوثيق.
+    */
+
     const payload = {
       phone_number: normalizedPhone,
-      template_name: "1st_utillty",
-      template_language: "en", // غيّرها للغة المعتمدة عندك لو مختلفة
-      field_1: cleanParam(customerName),
-      field_2: cleanParam(`${orderId} ${storeTag}`.trim()),
-      field_3: cleanParam(addressAndProduct),
+      template_name: "1st_utillty", 
+      template_language: "en_US", // 👈 حاول بـ en_US وإذا فشل جرب en_us (سمول)
+      
+      // المتغيرات المباشرة حسب التوثيق
+      field_1: cleanParam(customerName),                      // {{1}}
+      field_2: cleanParam(`${orderId} ${storeTag}`.trim()),   // {{2}}
+      field_3: cleanParam(addressAndProduct),                 // {{3}}
+
+      // إذا كان القالب يحتوي على صورة في الهيدر، يجب إضافة header_image هنا
+      // "header_image": "LINK_TO_IMAGE",
+      
       contact: {
         first_name: cleanParam(customerName),
         phone_number: normalizedPhone,
@@ -99,9 +91,8 @@ module.exports = async function webhook(req, res) {
     };
 
     const endpoint = `${API_BASE_URL}/${VENDOR_UID}/contact/send-template-message`;
-
+    
     console.log("🚀 Sending Payload:", JSON.stringify(payload, null, 2));
-    console.log("📍 Endpoint:", endpoint);
 
     const saasRes = await fetch(endpoint, {
       method: "POST",
@@ -123,7 +114,9 @@ module.exports = async function webhook(req, res) {
     return res.status(200).json({ status: "sent", data: responseData });
 
   } catch (err) {
-    console.error("❌ Webhook Crash:", err);
-    return res.status(500).json({ error: "internal_error", details: err?.message || String(err) });
+    console.error("❌ Error:", err);
+    return res.status(500).json({ error: "internal_error" });
   }
-};
+}
+
+module.exports = webhook;
