@@ -1,4 +1,4 @@
-// api/webhook2.js
+// api/webhook.js
 
 async function webhook(req, res) {
   // ✅ Health Check
@@ -6,7 +6,7 @@ async function webhook(req, res) {
     return res.status(200).send("Webhook Running ✅");
   }
 
-  // ✅ Allow only POST (EasyOrders)
+  // ✅ Allow only POST
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
   }
@@ -14,7 +14,7 @@ async function webhook(req, res) {
   try {
     const data = req.body || {};
 
-    // 🆕 0) قراءة التاج من الويبهوك URL ?storeTag=EQ / GZ / BR
+    // 🆕 0) قراءة التاج
     const storeTagRaw = (req.query && req.query.storeTag) || "";
     const storeTag = storeTagRaw ? `[${storeTagRaw}]` : "";
     console.log("🏪 Store Tag:", storeTagRaw || "NO_TAG");
@@ -31,12 +31,10 @@ async function webhook(req, res) {
     const orderId = data.short_id || data.order_id || data.id || "";
     const address = data.address || data.government || "";
 
-    // 🔹 أول عنصر في السلة
     const firstItem = data.cart_items?.[0] || {};
     const productName = firstItem.product?.name || "منتجك";
     const quantity = firstItem.quantity != null ? firstItem.quantity : 1;
 
-    // السعر: نحاول نجيبه من الآتي بالترتيب
     const price =
       firstItem.price != null
         ? firstItem.price
@@ -46,7 +44,7 @@ async function webhook(req, res) {
         ? data.cost
         : "";
 
-    // تركيب المتغير {{3}} = العنوان + المنتج + الكمية + السعر
+    // تركيب نص المتغير الثالث
     let addressAndProduct = address || "";
     if (productName) {
       addressAndProduct += (addressAndProduct ? " - " : "") + productName;
@@ -58,7 +56,6 @@ async function webhook(req, res) {
       addressAndProduct += ` - السعر: ${price}`;
     }
 
-    // تنظيف الباراميترات (مفيش سطور جديدة أو Tabs)
     const cleanParam = (text) => {
       if (!text) return "";
       return text.toString().replace(/[\r\n\t]+/g, " ").trim();
@@ -69,20 +66,13 @@ async function webhook(req, res) {
     // -------------------------
     let raw = customerPhone.toString().replace(/[^0-9]/g, "");
 
-    // السعودية
     if (raw.startsWith("05") && raw.length === 10) {
       raw = "966" + raw.substring(1);
-    }
-    // مصر
-    else if (raw.startsWith("01") && raw.length === 11) {
+    } else if (raw.startsWith("01") && raw.length === 11) {
       raw = "20" + raw.substring(1);
-    }
-    // السودان
-    else if (raw.startsWith("09") && raw.length === 10) {
+    } else if (raw.startsWith("09") && raw.length === 10) {
       raw = "249" + raw.substring(1);
-    }
-    // اليمن
-    else if (raw.startsWith("7") && raw.length === 9) {
+    } else if (raw.startsWith("7") && raw.length === 9) {
       raw = "967" + raw;
     }
 
@@ -90,7 +80,7 @@ async function webhook(req, res) {
     console.log("📞 Normalized Phone:", normalizedPhone);
 
     // -------------------------
-    // 3) متغيرات SaaS (Paramedics)
+    // 3) متغيرات البيئة
     // -------------------------
     const API_BASE_URL = process.env.SAAS_API_BASE_URL;
     const VENDOR_UID = process.env.SAAS_VENDOR_UID;
@@ -102,15 +92,22 @@ async function webhook(req, res) {
     }
 
     // -------------------------
-    // 4) Payload الخاص بالتمبلت
+    // 4) Payload المصحح (التغيير هنا) 👇
     // -------------------------
+    
+    // ملاحظة: نضع المتغيرات بالترتيب داخل مصفوفة parameters
     const payload = {
       phone_number: normalizedPhone,
       template_name: "1st_utillty",
-      template_language: "en", // نفس اللغة اللي في التمبلت
-      field_1: cleanParam(customerName),                        // {{1}} اسم العميل
-      field_2: cleanParam(`${orderId} ${storeTag}`.trim()),     // 🆕 {{2}} رقم الطلب + [EQ]/[GZ]/[BR]
-      field_3: cleanParam(addressAndProduct),                   // {{3}} العنوان + المنتج + الكمية + السعر
+      template_language: "en",
+      
+      // ✅ التصحيح: استخدام مصفوفة parameters بدلاً من field_1, field_2
+      parameters: [
+        cleanParam(customerName),                      // يقابل {{1}}
+        cleanParam(`${orderId} ${storeTag}`.trim()),   // يقابل {{2}}
+        cleanParam(addressAndProduct)                  // يقابل {{3}}
+      ],
+
       contact: {
         first_name: cleanParam(customerName),
         phone_number: normalizedPhone,
@@ -120,7 +117,7 @@ async function webhook(req, res) {
 
     const endpoint = `${API_BASE_URL}/${VENDOR_UID}/contact/send-template-message`;
 
-    console.log("🚀 Sending to SaaS:", endpoint, payload);
+    console.log("🚀 Sending to SaaS:", endpoint, JSON.stringify(payload, null, 2));
 
     const saasRes = await fetch(endpoint, {
       method: "POST",
@@ -142,11 +139,11 @@ async function webhook(req, res) {
 
     console.log("✅ SaaS Response:", responseData);
     return res.status(200).json({ status: "sent", data: responseData });
+
   } catch (err) {
     console.error("❌ Webhook Error:", err);
     return res.status(500).json({ error: "internal_error" });
   }
 }
 
-// ✅ تصدير بصيغة CommonJS عشان Vercel
 module.exports = webhook;
