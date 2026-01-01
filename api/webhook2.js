@@ -6,10 +6,11 @@ async function webhook(req, res) {
 
   try {
     const data = req.body || {};
+    const storeTag = storeTagRaw ? [${storeTagRaw}] : "";
     
     // قراءة التاج
     const storeTagRaw = (req.query && req.query.storeTag) || "";
-    const storeTag = storeTagRaw ? [${storeTagRaw}] : "";
+    
 
     // -------------------------
     // 1) تجهيز البيانات
