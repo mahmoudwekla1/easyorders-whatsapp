@@ -63,17 +63,12 @@ async function webhook(req, res) {
     // -------------------------
     // 4) Payload حسب التوثيق (The Documentation Way)
     // -------------------------
-    
-    /* تنبيه هام:
-       1. تأكد أن اسم القالب "1st_utillty" مكتوب بدقة (هل هو utillty أم utility؟).
-       2. تم تغيير اللغة إلى "en_US" لأن "en" غالباً تسبب مشاكل في المطابقة.
-       3. عدنا لاستخدام field_1, field_2 كما في التوثيق.
-    */
+  
 
     const payload = {
       phone_number: normalizedPhone,
-      template_name: "1st_utillty", 
-      template_language: "en_US", // 👈 حاول بـ en_US وإذا فشل جرب en_us (سمول)
+      template_name: "first_utillty", 
+      template_language: "en", 
       
       // المتغيرات المباشرة حسب التوثيق
       field_1: cleanParam(customerName),                      // {{1}}
