@@ -1,56 +1,100 @@
 // api/webhook.js
 
-async function webhook(req, res) {
-  if (req.method === "GET") return res.status(200).send("Webhook Running ✅");
-  if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
+module.exports = async function webhook(req, res) {
+  // Health Check
+  if (req.method === "GET") {
+    return res.status(200).send("Webhook Running ✅");
+  }
+
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method not allowed" });
+  }
 
   try {
     const data = req.body || {};
 
-    // قراءة التاج
+    // قراءة Store Tag
     const storeTagRaw = (req.query && req.query.storeTag) || "";
     const storeTag = storeTagRaw ? `[${storeTagRaw}]` : "";
 
     // -------------------------
-    // 1) تجهيز البيانات
+    // 1) بيانات العميل والطلب
     // -------------------------
-    const customerName = data.full_name || data.name || data.customer_name || "عميلنا العزيز";
-    const customerPhone = data.phone || data.phone_alt || data.customer_phone || "";
-    const orderId = data.short_id || data.order_id || data.id || "";
-    const address = data.address || data.government || "";
+    const customerName =
+      data.full_name || data.name || data.customer_name || "عميلنا العزيز";
+
+    const customerPhone =
+      data.phone || data.phone_alt || data.customer_phone || "";
+
+    const orderId =
+      data.short_id || data.order_id || data.id || "";
+
+    const address =
+      data.address || data.government || data.city || "";
 
     const firstItem = data.cart_items?.[0] || {};
     const productName = firstItem.product?.name || "منتجك";
     const quantity = firstItem.quantity != null ? firstItem.quantity : 1;
 
-    const price = firstItem.price != null ? firstItem.price
-      : data.total_cost != null ? data.total_cost
-      : data.cost != null ? data.cost : "";
+    const priceRaw =
+      firstItem.price ??
+      data.total_cost ??
+      data.cost ??
+      0;
 
-    // تركيب المتغير الثالث
-    let addressAndProduct = address || "";
-    if (productName) addressAndProduct += (addressAndProduct ? " - " : "") + productName;
-    if (quantity) addressAndProduct += ` - الكمية: ${quantity}`;
-    if (price !== "") addressAndProduct += ` - السعر: ${price}`;
+    // -------------------------
+    // 2) حساب الشحن + الإجمالي (SAR)
+    // -------------------------
+    const shippingRaw =
+      data.shipping_cost ??
+      data.shipping_fee ??
+      data.shipping_price ??
+      data.delivery_cost ??
+      data.shipping ??
+      data.delivery ??
+      0;
+
+    const priceNum = Number(String(priceRaw).replace(/[^0-9.]/g, "")) || 0;
+    const shippingNum = Number(String(shippingRaw).replace(/[^0-9.]/g, "")) || 0;
+
+    const shippingText =
+      shippingNum > 0 ? `${shippingNum} ريال سعودي` : "مجاني";
+
+    const totalNum =
+      shippingNum > 0 ? priceNum + shippingNum : priceNum;
+
+    // -------------------------
+    // 3) تفاصيل الطلب (المتغير الثالث)
+    // -------------------------
+    const addressAndProduct = `
+اسم المنتج: ${productName}
+الكمية: ${quantity}
+سعر المنتج: ${priceNum} ريال سعودي
+الشحن: ${shippingText}
+الإجمالي: ${totalNum} ريال سعودي
+العنوان: ${address}
+`.trim();
 
     const cleanParam = (text) => {
       if (!text) return "";
-      return text.toString().replace(/[\r\n\t]+/g, " ").trim();
+      return String(text).replace(/[\r\n\t]+/g, " ").trim();
     };
 
     // -------------------------
-    // 2) توحيد رقم الهاتف
+    // 4) توحيد رقم الهاتف
     // -------------------------
-    let raw = customerPhone.toString().replace(/[^0-9]/g, "");
+    let raw = String(customerPhone).replace(/[^0-9]/g, "");
+
+    // السعودية
     if (raw.startsWith("05") && raw.length === 10) raw = "966" + raw.substring(1);
+
+    // مصر
     else if (raw.startsWith("01") && raw.length === 11) raw = "20" + raw.substring(1);
-    else if (raw.startsWith("09") && raw.length === 10) raw = "249" + raw.substring(1);
-    else if (raw.startsWith("7") && raw.length === 9) raw = "967" + raw;
 
     const normalizedPhone = raw;
 
     // -------------------------
-    // 3) متغيرات البيئة
+    // 5) ENV
     // -------------------------
     const API_BASE_URL = process.env.SAAS_API_BASE_URL;
     const VENDOR_UID = process.env.SAAS_VENDOR_UID;
@@ -61,12 +105,10 @@ async function webhook(req, res) {
     }
 
     // -------------------------
-    // 4) Payload
+    // 6) Payload (WhatsApp Template)
     // -------------------------
     const payload = {
       phone_number: normalizedPhone,
-
-      // ✅ زي ما طلبت
       template_name: "first_utillty",
       template_language: "ar",
 
@@ -96,7 +138,6 @@ async function webhook(req, res) {
 
     const responseData = await saasRes.json().catch(() => null);
 
-    // ملاحظة: بعض الـ APIs بيرجعوا result: 'failed' مع status 200
     if (!saasRes.ok || responseData?.result === "failed") {
       console.error("❌ SaaS Error:", responseData);
       return res.status(500).json({ error: "saas_error", details: responseData });
@@ -106,9 +147,10 @@ async function webhook(req, res) {
     return res.status(200).json({ status: "sent", data: responseData });
 
   } catch (err) {
-    console.error("❌ Error:", err);
-    return res.status(500).json({ error: "internal_error", details: err?.message || String(err) });
+    console.error("❌ Webhook Crash:", err);
+    return res.status(500).json({
+      error: "internal_error",
+      details: err?.message || String(err),
+    });
   }
-}
-
-module.exports = webhook;
+};
