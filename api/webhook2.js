@@ -28,13 +28,15 @@ module.exports = async function webhook(req, res) {
 
     // =========================
     // Normalize Phone (Arabic Countries - E.164)
+    // - يرجع +XXXXXXXXX
+    // - يقبل رقم محلي بدون مفتاح
     // =========================
     function normalizePhone(phone, country = "KSA") {
       if (!phone) return "";
 
       let raw = String(phone).replace(/[^0-9]/g, "");
 
-      // لو جاي بكود دولة بالفعل
+      // لو جاي بكود دولة بالفعل (بدون +)
       const knownCodes = [
         "966","971","20","249","967","962","965","974","973","968",
         "964","212","213","216","218","970","961","963","222"
@@ -46,37 +48,35 @@ module.exports = async function webhook(req, res) {
         }
       }
 
-      // ===== أرقام محلية =====
+      // ===== أرقام محلية بدون مفتاح =====
 
-      // مصر
+      // مصر: 01xxxxxxxxx -> +20 1xxxxxxxxx
       if (raw.startsWith("01") && raw.length === 11) {
         return `+20${raw.substring(1)}`;
       }
 
-      // السودان
+      // السودان: 09xxxxxxxx -> +249 9xxxxxxxx
       if (raw.startsWith("09") && raw.length === 10) {
         return `+249${raw.substring(1)}`;
       }
 
-      // اليمن
+      // اليمن (تقريب شائع): 07xxxxxxx (9 أرقام) -> +967 7xxxxxxx
       if (raw.startsWith("07") && raw.length === 9) {
         return `+967${raw.substring(1)}`;
       }
 
-      // الأردن
+      // الأردن: 07xxxxxxxx (10 أرقام) -> +962 7xxxxxxxx
       if (raw.startsWith("07") && raw.length === 10) {
         return `+962${raw.substring(1)}`;
       }
 
-      // السعودية / الإمارات
+      // السعودية / الإمارات: 05xxxxxxxx (10 أرقام)
       if (raw.startsWith("05") && raw.length === 10) {
-        if (country === "UAE") {
-          return `+971${raw.substring(1)}`;
-        }
+        if (country === "UAE") return `+971${raw.substring(1)}`;
         return `+966${raw.substring(1)}`; // Default KSA
       }
 
-      // fallback
+      // fallback: لو رقم طويل مش معروف، نضيف +
       return raw ? `+${raw}` : "";
     }
 
@@ -101,17 +101,25 @@ module.exports = async function webhook(req, res) {
       data.id ||
       "";
 
+    // لو عندك بلد في الطلب (مفيد لتفريق 05 بين السعودية والإمارات)
     const country =
       data.country ||
       data.shipping_country ||
       "KSA";
 
-    const e164Phone = normalizePhone(customerPhone, country);
+    // =========================
+    // رقم الهاتف
+    // =========================
+    const e164Phone = normalizePhone(customerPhone, country); // +2010...
+    const digitsPhone = e164Phone.replace(/^\+/, "");         // 2010... (digits only)
 
-    if (!e164Phone || e164Phone.length < 8) {
+    // منصتك بتشتكي "at least 9 digits" -> نتحقق من digitsPhone
+    if (!digitsPhone || digitsPhone.length < 9) {
       return res.status(400).json({
         error: "invalid_phone",
-        phone: customerPhone,
+        input_phone: customerPhone,
+        e164Phone,
+        digitsPhone,
       });
     }
 
@@ -120,8 +128,7 @@ module.exports = async function webhook(req, res) {
     // =========================
     const firstItem = data.cart_items?.[0] || {};
     const productName = firstItem.product?.name || "منتج";
-    const quantity =
-      firstItem.quantity != null ? firstItem.quantity : 1;
+    const quantity = firstItem.quantity != null ? firstItem.quantity : 1;
 
     const priceRaw =
       firstItem.price ??
@@ -154,7 +161,7 @@ module.exports = async function webhook(req, res) {
       shippingNum > 0 ? priceNum + shippingNum : priceNum;
 
     // =========================
-    // العناوين
+    // العنوان التفصيلي + العنوان الوطني
     // =========================
     const detailedAddress =
       data.address ||
@@ -180,7 +187,7 @@ module.exports = async function webhook(req, res) {
         : "غير متوفر (يرجى تزويدنا بالعنوان الوطني)";
 
     // =========================
-    // {{3}} العنوان المسجل لدينا
+    // {{3}} = العنوان المسجل لدينا (التفصيلي ثم الوطني آخر شيء)
     // =========================
     const field3Text = safeText(
       `العنوان التفصيلي: ${safeText(detailedAddress)} 🔴 العنوان الوطني: ${nationalAddress}`
@@ -198,17 +205,17 @@ module.exports = async function webhook(req, res) {
     }
 
     // =========================
-    // Payload WhatsApp
+    // Payload WhatsApp (digits only حسب متطلبات منصتك)
     // =========================
     const payload = {
-      phone_number: e164Phone,
+      phone_number: digitsPhone,
       template_name: "first_utillty",
       template_language: "ar",
 
       // {{1}}
       field_1: safeText(customerName),
 
-      // {{2}} رقم الطلب + تفاصيله
+      // {{2}} رقم الطلب + تفاصيل الطلب جنبها
       field_2: safeText(
         `${orderId} — المنتج: ${productName} | الكمية: ${quantity} | السعر: ${priceNum} ريال سعودي | الشحن: ${shippingText} | الإجمالي: ${totalNum} ريال سعودي`
       ),
@@ -218,7 +225,7 @@ module.exports = async function webhook(req, res) {
 
       contact: {
         first_name: safeText(customerName),
-        phone_number: e164Phone,
+        phone_number: digitsPhone,
         country: "auto",
       },
     };
@@ -243,6 +250,8 @@ module.exports = async function webhook(req, res) {
       return res.status(500).json({
         error: "saas_error",
         details: responseData,
+        // Debug مساعد لو احتجته
+        debug_phone: { input: customerPhone, e164Phone, digitsPhone },
       });
     }
 
