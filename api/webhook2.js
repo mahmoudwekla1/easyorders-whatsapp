@@ -16,7 +16,72 @@ module.exports = async function webhook(req, res) {
     const data = req.body || {};
 
     // =========================
-    // بيانات العميل والطلب
+    // Helpers
+    // =========================
+    const safeText = (t) => {
+      if (!t) return "";
+      return String(t)
+        .replace(/[\r\n\t]+/g, " ")
+        .replace(/\s{2,}/g, " ")
+        .trim();
+    };
+
+    // =========================
+    // Normalize Phone (Arabic Countries - E.164)
+    // =========================
+    function normalizePhone(phone, country = "KSA") {
+      if (!phone) return "";
+
+      let raw = String(phone).replace(/[^0-9]/g, "");
+
+      // لو جاي بكود دولة بالفعل
+      const knownCodes = [
+        "966","971","20","249","967","962","965","974","973","968",
+        "964","212","213","216","218","970","961","963","222"
+      ];
+
+      for (const code of knownCodes) {
+        if (raw.startsWith(code)) {
+          return `+${raw}`;
+        }
+      }
+
+      // ===== أرقام محلية =====
+
+      // مصر
+      if (raw.startsWith("01") && raw.length === 11) {
+        return `+20${raw.substring(1)}`;
+      }
+
+      // السودان
+      if (raw.startsWith("09") && raw.length === 10) {
+        return `+249${raw.substring(1)}`;
+      }
+
+      // اليمن
+      if (raw.startsWith("07") && raw.length === 9) {
+        return `+967${raw.substring(1)}`;
+      }
+
+      // الأردن
+      if (raw.startsWith("07") && raw.length === 10) {
+        return `+962${raw.substring(1)}`;
+      }
+
+      // السعودية / الإمارات
+      if (raw.startsWith("05") && raw.length === 10) {
+        if (country === "UAE") {
+          return `+971${raw.substring(1)}`;
+        }
+        return `+966${raw.substring(1)}`; // Default KSA
+      }
+
+      // fallback
+      return raw ? `+${raw}` : "";
+    }
+
+    // =========================
+    // بيانات العميل
     // =========================
     const customerName =
       data.full_name ||
@@ -36,19 +101,22 @@ module.exports = async function webhook(req, res) {
       data.id ||
       "";
 
-    // =========================
-    // العنوان التفصيلي
-    // =========================
-    const detailedAddress =
-      data.address ||
-      data.full_address ||
-      data.shipping_address ||
-      data.address_text ||
-      data.city ||
-      "غير متوفر";
+    const country =
+      data.country ||
+      data.shipping_country ||
+      "KSA";
+
+    const e164Phone = normalizePhone(customerPhone, country);
+
+    if (!e164Phone || e164Phone.length < 8) {
+      return res.status(400).json({
+        error: "invalid_phone",
+        phone: customerPhone,
+      });
+    }
 
     // =========================
-    // بيانات المنتج
+    // المنتج
     // =========================
     const firstItem = data.cart_items?.[0] || {};
     const productName = firstItem.product?.name || "منتج";
@@ -86,8 +154,16 @@ module.exports = async function webhook(req, res) {
       shippingNum > 0 ? priceNum + shippingNum : priceNum;
 
     // =========================
-    // العنوان الوطني (آخر حاجة)
+    // العناوين
     // =========================
+    const detailedAddress =
+      data.address ||
+      data.full_address ||
+      data.shipping_address ||
+      data.address_text ||
+      data.city ||
+      "غير متوفر";
+
     const nationalAddressRaw =
       data.national_address ||
       data.short_address ||
@@ -104,23 +180,10 @@ module.exports = async function webhook(req, res) {
         : "غير متوفر (يرجى تزويدنا بالعنوان الوطني)";
 
     // =========================
-    // تنظيف نص (سطر واحد)
-    // =========================
-    const safeText = (t) => {
-      if (!t) return "";
-      return String(t)
-        .replace(/[\r\n\t]+/g, " ")
-        .replace(/\s{2,}/g, " ")
-        .trim();
-    };
-
-    const addrText = safeText(detailedAddress);
-
-    // =========================
-    // {{3}} = العنوان المسجل لدينا
+    // {{3}} العنوان المسجل لدينا
     // =========================
     const field3Text = safeText(
-      `العنوان التفصيلي: ${addrText} 🔴 العنوان الوطني: ${nationalAddress}`
+      `العنوان التفصيلي: ${safeText(detailedAddress)} 🔴 العنوان الوطني: ${nationalAddress}`
     );
 
     // =========================
@@ -138,7 +201,7 @@ module.exports = async function webhook(req, res) {
     // Payload WhatsApp
     // =========================
     const payload = {
-      phone_number: safeText(customerPhone),
+      phone_number: e164Phone,
       template_name: "first_utillty",
       template_language: "ar",
 
@@ -150,12 +213,12 @@ module.exports = async function webhook(req, res) {
         `${orderId} — المنتج: ${productName} | الكمية: ${quantity} | السعر: ${priceNum} ريال سعودي | الشحن: ${shippingText} | الإجمالي: ${totalNum} ريال سعودي`
       ),
 
-      // {{3}} العنوان المسجل لدينا
+      // {{3}} العنوان
       field_3: field3Text,
 
       contact: {
         first_name: safeText(customerName),
-        phone_number: safeText(customerPhone),
+        phone_number: e164Phone,
         country: "auto",
       },
     };
