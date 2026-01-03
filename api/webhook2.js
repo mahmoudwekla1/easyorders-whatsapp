@@ -1,7 +1,9 @@
 // api/webhook.js
 
 module.exports = async function webhook(req, res) {
+  // =========================
   // Health Check
+  // =========================
   if (req.method === "GET") {
     return res.status(200).send("Webhook Running ✅");
   }
@@ -13,36 +15,45 @@ module.exports = async function webhook(req, res) {
   try {
     const data = req.body || {};
 
-    // قراءة Store Tag
-    const storeTagRaw = (req.query && req.query.storeTag) || "";
-    const storeTag = storeTagRaw ? `[${storeTagRaw}]` : "";
-
-    // -------------------------
-    // 1) بيانات العميل والطلب
-    // -------------------------
+    // =========================
+    // بيانات العميل والطلب
+    // =========================
     const customerName =
-      data.full_name || data.name || data.customer_name || "عميلنا العزيز";
+      data.full_name ||
+      data.name ||
+      data.customer_name ||
+      "عميلنا العزيز";
 
     const customerPhone =
-      data.phone || data.phone_alt || data.customer_phone || "";
+      data.phone ||
+      data.phone_alt ||
+      data.customer_phone ||
+      "";
 
     const orderId =
-      data.short_id || data.order_id || data.id || "";
+      data.short_id ||
+      data.order_id ||
+      data.id ||
+      "";
 
+    // =========================
     // العنوان التفصيلي
+    // =========================
     const detailedAddress =
       data.address ||
       data.full_address ||
       data.shipping_address ||
       data.address_text ||
-      data.government ||
       data.city ||
-      "";
+      "غير متوفر";
 
-    // المنتج
+    // =========================
+    // بيانات المنتج
+    // =========================
     const firstItem = data.cart_items?.[0] || {};
-    const productName = firstItem.product?.name || "منتجك";
-    const quantity = firstItem.quantity != null ? firstItem.quantity : 1;
+    const productName = firstItem.product?.name || "منتج";
+    const quantity =
+      firstItem.quantity != null ? firstItem.quantity : 1;
 
     const priceRaw =
       firstItem.price ??
@@ -50,9 +61,9 @@ module.exports = async function webhook(req, res) {
       data.cost ??
       0;
 
-    // -------------------------
-    // 2) حساب الشحن + الإجمالي (SAR)
-    // -------------------------
+    // =========================
+    // الشحن + الإجمالي
+    // =========================
     const shippingRaw =
       data.shipping_cost ??
       data.shipping_fee ??
@@ -62,70 +73,59 @@ module.exports = async function webhook(req, res) {
       data.delivery ??
       0;
 
-    const priceNum = Number(String(priceRaw).replace(/[^0-9.]/g, "")) || 0;
-    const shippingNum = Number(String(shippingRaw).replace(/[^0-9.]/g, "")) || 0;
+    const priceNum =
+      Number(String(priceRaw).replace(/[^0-9.]/g, "")) || 0;
 
-    const shippingText = shippingNum > 0 ? `${shippingNum} ريال سعودي` : "مجاني";
-    const totalNum = shippingNum > 0 ? priceNum + shippingNum : priceNum;
+    const shippingNum =
+      Number(String(shippingRaw).replace(/[^0-9.]/g, "")) || 0;
 
-    // -------------------------
-    // 3) العنوان الوطني (لو موجود)
-    // -------------------------
+    const shippingText =
+      shippingNum > 0 ? `${shippingNum} ريال سعودي` : "مجاني";
+
+    const totalNum =
+      shippingNum > 0 ? priceNum + shippingNum : priceNum;
+
+    // =========================
+    // العنوان الوطني (آخر حاجة)
+    // =========================
     const nationalAddressRaw =
       data.national_address ||
       data.short_address ||
       data.shortAddress ||
       data.address_short ||
-      data.na_short ||
       "";
 
-    const nationalAddressClean = String(nationalAddressRaw).trim();
+    const nationalAddressClean =
+      String(nationalAddressRaw).trim();
 
     const nationalAddress =
       nationalAddressClean
         ? nationalAddressClean
         : "غير متوفر (يرجى تزويدنا بالعنوان الوطني)";
 
-    // -------------------------
-    // 4) تنسيق الرسالة (سطر واحد مرتب)
-    // -------------------------
+    // =========================
+    // تنظيف نص (سطر واحد)
+    // =========================
     const safeText = (t) => {
       if (!t) return "";
       return String(t)
-        .replace(/[\r\n\t]+/g, " ")   // واتساب غالبًا هيكبس السطور، فنخليها أصلًا سطر واحد
+        .replace(/[\r\n\t]+/g, " ")
         .replace(/\s{2,}/g, " ")
         .trim();
     };
 
-    const addrText = safeText(detailedAddress) || "غير متوفر";
+    const addrText = safeText(detailedAddress);
 
-    // ✅ تنسيق مقروء حتى لو سطر واحد
-    const addressAndProduct = safeText(
-      `تفاصيل الطلب 🧾 — ` +
-      `المنتج: ${productName} | ` +
-      `الكمية: ${quantity} | ` +
-      `السعر: ${priceNum} ريال سعودي | ` +
-      `الشحن: ${shippingText} | ` +
-      `الإجمالي: ${totalNum} ريال سعودي — ` +
-      `العنوان التفصيلي: ${addrText} — ` +
-      `العنوان الوطني 📍: ${nationalAddress}`
+    // =========================
+    // {{3}} = العنوان المسجل لدينا
+    // =========================
+    const field3Text = safeText(
+      `العنوان التفصيلي: ${addrText} 🔴 العنوان الوطني: ${nationalAddress}`
     );
 
-    // -------------------------
-    // 5) توحيد رقم الهاتف
-    // -------------------------
-    let raw = String(customerPhone).replace(/[^0-9]/g, "");
-
-    // السعودية
-    if (raw.startsWith("05") && raw.length === 10) raw = "966" + raw.substring(1);
-    // مصر
-    else if (raw.startsWith("01") && raw.length === 11) raw = "20" + raw.substring(1);
-
-    const normalizedPhone = raw;
-
-    // -------------------------
-    // 6) ENV
-    // -------------------------
+    // =========================
+    // ENV
+    // =========================
     const API_BASE_URL = process.env.SAAS_API_BASE_URL;
     const VENDOR_UID = process.env.SAAS_VENDOR_UID;
     const API_TOKEN = process.env.SAAS_API_TOKEN;
@@ -134,21 +134,28 @@ module.exports = async function webhook(req, res) {
       return res.status(500).json({ error: "missing_env" });
     }
 
-    // -------------------------
-    // 7) Payload (WhatsApp Template)
-    // -------------------------
+    // =========================
+    // Payload WhatsApp
+    // =========================
     const payload = {
-      phone_number: normalizedPhone,
+      phone_number: safeText(customerPhone),
       template_name: "first_utillty",
       template_language: "ar",
 
+      // {{1}}
       field_1: safeText(customerName),
-      field_2: safeText(`${orderId} ${storeTag}`.trim()),
-      field_3: addressAndProduct,
+
+      // {{2}} رقم الطلب + تفاصيله
+      field_2: safeText(
+        `${orderId} — المنتج: ${productName} | الكمية: ${quantity} | السعر: ${priceNum} ريال سعودي | الشحن: ${shippingText} | الإجمالي: ${totalNum} ريال سعودي`
+      ),
+
+      // {{3}} العنوان المسجل لدينا
+      field_3: field3Text,
 
       contact: {
         first_name: safeText(customerName),
-        phone_number: normalizedPhone,
+        phone_number: safeText(customerPhone),
         country: "auto",
       },
     };
@@ -170,11 +177,17 @@ module.exports = async function webhook(req, res) {
 
     if (!saasRes.ok || responseData?.result === "failed") {
       console.error("❌ SaaS Error:", responseData);
-      return res.status(500).json({ error: "saas_error", details: responseData });
+      return res.status(500).json({
+        error: "saas_error",
+        details: responseData,
+      });
     }
 
     console.log("✅ Success:", responseData);
-    return res.status(200).json({ status: "sent", data: responseData });
+    return res.status(200).json({
+      status: "sent",
+      data: responseData,
+    });
 
   } catch (err) {
     console.error("❌ Webhook Crash:", err);
